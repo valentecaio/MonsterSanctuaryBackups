@@ -37,20 +37,8 @@ The same command works. Run it from **Desktop Mode**:
 Nothing to install as root, and nothing outside your home directory — so it survives SteamOS
 updates, which replace the whole system partition.
 
-**If the game runs through Proton** rather than the native Linux build, saves are inside the Proton
-prefix instead of the path above. Check with:
-
-```bash
-ls ~/.local/share/"Monster Sanctuary"/*/Savegame*.dat 2>/dev/null \
-  || find ~/.local/share/Steam/steamapps/compatdata -name 'Savegame*.dat' 2>/dev/null
-```
-
-If it's the second one, re-run the installer with the directory *containing* the `<steam-id>` folder:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/valentecaio/MonsterSanctuaryBackups/main/install.sh \
-  | SAVE_ROOT="/path/from/the/find/above" bash
-```
+Monster Sanctuary has a native Linux build, so it writes to the same path on the Deck as on any
+other Linux machine — no Proton prefix to chase.
 
 ## Restore
 

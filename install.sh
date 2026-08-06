@@ -98,8 +98,7 @@ echo "scheduled every 15 min, logs: journalctl --user -u ms-backup.service"
 # ------------------------------------------------------------------ first run
 
 "$TARGET" || cat >&2 <<EOF
-note: no save files found yet under \$SAVE_ROOT.
-      Run the game once, or if it runs through Proton, find the saves with:
-        find ~/.local/share/Steam/steamapps/compatdata -name 'Savegame*.dat'
-      then re-run this installer with SAVE_ROOT set to the directory above them.
+note: no save files found yet - run the game once. If your saves live somewhere
+      else, re-run this installer with SAVE_ROOT set to the directory that
+      contains the <steam-id> folder.
 EOF
