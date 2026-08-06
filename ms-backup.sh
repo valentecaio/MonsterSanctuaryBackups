@@ -5,6 +5,12 @@
 
 set -euo pipefail
 
+# Optional config, written by install.sh. Needed because cron and systemd do not
+# inherit the environment you installed from.
+CONFIG="${CONFIG:-$HOME/.config/ms-backup.conf}"
+# shellcheck source=/dev/null
+[ -f "$CONFIG" ] && . "$CONFIG"
+
 SAVE_ROOT="${SAVE_ROOT:-$HOME/.local/share/Monster Sanctuary}"
 BACKUP_ROOT="${BACKUP_ROOT:-$SAVE_ROOT/backups}"
 KEEP="${KEEP:-200}"   # backups to keep per save file

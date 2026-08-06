@@ -1,16 +1,25 @@
 #!/usr/bin/env bash
-# Installs ms-backup.sh from GitHub and a cronjob that runs it every 15 minutes.
-# Idempotent: re-running replaces the script and the existing cron entry.
+# Installs ms-backup.sh from GitHub and schedules it every 15 minutes.
 #
 #   curl -fsSL https://raw.githubusercontent.com/valentecaio/MonsterSanctuaryBackups/main/install.sh | bash
+#
+# Scheduler is picked automatically: cron where it exists, otherwise a systemd
+# user timer (SteamOS/Steam Deck ships no cron). Override with SCHEDULER=cron
+# or SCHEDULER=systemd. Idempotent, and switching schedulers removes the other
+# one's entry so the backup never gets scheduled twice.
 
 set -euo pipefail
 
 REPO="${REPO:-valentecaio/MonsterSanctuaryBackups}"
 REF="${REF:-main}"
-RAW_BASE="https://raw.githubusercontent.com/$REPO/$REF"
+RAW_BASE="${RAW_BASE:-https://raw.githubusercontent.com/$REPO/$REF}"
 TARGET="${TARGET:-$HOME/.local/bin/ms-backup.sh}"
 LOG="${LOG:-$HOME/.ms-backup.log}"
+UNIT_DIR="$HOME/.config/systemd/user"
+
+have() { command -v "$1" >/dev/null 2>&1; }
+
+# ---------------------------------------------------------------- fetch script
 
 mkdir -p "$(dirname "$TARGET")"
 
@@ -18,9 +27,9 @@ mkdir -p "$(dirname "$TARGET")"
 tmp=$(mktemp)
 trap 'rm -f "$tmp"' EXIT
 
-if command -v curl >/dev/null 2>&1; then
+if have curl; then
     curl -fsSL "$RAW_BASE/ms-backup.sh" -o "$tmp"
-elif command -v wget >/dev/null 2>&1; then
+elif have wget; then
     wget -qO "$tmp" "$RAW_BASE/ms-backup.sh"
 else
     echo "need curl or wget" >&2
@@ -34,15 +43,98 @@ bash -n "$tmp" || { echo "downloaded script failed syntax check" >&2; exit 1; }
 install -m 755 "$tmp" "$TARGET"
 echo "installed: $TARGET"
 
-if ! command -v crontab >/dev/null 2>&1; then
-    echo "crontab not found - install cron, then re-run this installer" >&2
+# Persist overrides: the scheduled run gets no environment from this shell.
+CONFIG="${CONFIG:-$HOME/.config/ms-backup.conf}"
+if [ -n "${SAVE_ROOT:-}${BACKUP_ROOT:-}${KEEP:-}" ]; then
+    mkdir -p "$(dirname "$CONFIG")"
+    : > "$CONFIG"
+    [ -n "${SAVE_ROOT:-}" ]   && printf 'SAVE_ROOT=%q\n'   "$SAVE_ROOT"   >> "$CONFIG"
+    [ -n "${BACKUP_ROOT:-}" ] && printf 'BACKUP_ROOT=%q\n' "$BACKUP_ROOT" >> "$CONFIG"
+    [ -n "${KEEP:-}" ]        && printf 'KEEP=%q\n'        "$KEEP"        >> "$CONFIG"
+    echo "wrote config: $CONFIG"
+fi
+
+# ------------------------------------------------------------ pick a scheduler
+
+systemd_ok() { have systemctl && systemctl --user show-environment >/dev/null 2>&1; }
+
+if [ -n "${SCHEDULER:-}" ]; then
+    scheduler="$SCHEDULER"
+elif have crontab; then
+    scheduler=cron
+elif systemd_ok; then
+    scheduler=systemd
+else
+    echo "no scheduler available: install cron, or use a systemd user session" >&2
     exit 1
 fi
 
-# Replace any previous entry for this script.
-CRON_LINE="*/15 * * * * $TARGET >> $LOG 2>&1"
-( crontab -l 2>/dev/null | grep -Fv 'ms-backup.sh' || true; echo "$CRON_LINE" ) | crontab -
-echo "cronjob installed (every 15 min), logging to $LOG"
+remove_cron() {
+    have crontab || return 0
+    crontab -l 2>/dev/null | grep -qF 'ms-backup.sh' || return 0
+    ( crontab -l 2>/dev/null | grep -Fv 'ms-backup.sh' || true ) | crontab -
+}
 
-# Run once now so the first backup exists immediately.
-"$TARGET" || echo "note: first run found no save files - start the game once, then wait for cron" >&2
+remove_timer() {
+    systemd_ok || return 0
+    [ -f "$UNIT_DIR/ms-backup.timer" ] || return 0
+    systemctl --user disable --now ms-backup.timer >/dev/null 2>&1 || true
+    rm -f "$UNIT_DIR/ms-backup.timer" "$UNIT_DIR/ms-backup.service"
+    systemctl --user daemon-reload
+}
+
+case "$scheduler" in
+cron)
+    have crontab || { echo "SCHEDULER=cron but crontab is not installed" >&2; exit 1; }
+    remove_timer
+    ( crontab -l 2>/dev/null | grep -Fv 'ms-backup.sh' || true
+      echo "*/15 * * * * $TARGET >> $LOG 2>&1" ) | crontab -
+    echo "scheduled via cron (every 15 min), logging to $LOG"
+    ;;
+systemd)
+    systemd_ok || { echo "SCHEDULER=systemd but no systemd user session is available" >&2; exit 1; }
+    remove_cron
+    mkdir -p "$UNIT_DIR"
+
+    cat > "$UNIT_DIR/ms-backup.service" <<'EOF'
+[Unit]
+Description=Backup Monster Sanctuary save files
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/ms-backup.sh
+EOF
+
+    cat > "$UNIT_DIR/ms-backup.timer" <<'EOF'
+[Unit]
+Description=Backup Monster Sanctuary save files every 15 minutes
+
+[Timer]
+OnCalendar=*:0/15
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
+    systemctl --user daemon-reload
+    systemctl --user enable --now ms-backup.timer
+    # Keep the timer running when no desktop session is logged in.
+    loginctl enable-linger "$USER" >/dev/null 2>&1 \
+        || echo "note: could not enable linger; timer runs while you are logged in"
+    echo "scheduled via systemd user timer (every 15 min), logs: journalctl --user -u ms-backup.service"
+    ;;
+*)
+    echo "unknown SCHEDULER '$scheduler' (use cron or systemd)" >&2
+    exit 1
+    ;;
+esac
+
+# ------------------------------------------------------------------ first run
+
+"$TARGET" || cat >&2 <<EOF
+note: no save files found yet under \$SAVE_ROOT.
+      Run the game once, or if it runs through Proton, find the saves with:
+        find ~/.local/share/Steam/steamapps/compatdata -name 'Savegame*.dat'
+      then re-run this installer with SAVE_ROOT set to the directory above them.
+EOF
