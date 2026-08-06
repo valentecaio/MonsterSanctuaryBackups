@@ -6,14 +6,19 @@
 set -euo pipefail
 
 # Optional config, written by install.sh. Needed because the timer does not
-# inherit the environment you installed from.
+# inherit the environment you installed from. Precedence: environment, then
+# config, then the defaults below - so a one-off run can still override it.
+env_SAVE_ROOT="${SAVE_ROOT:-}"
+env_BACKUP_ROOT="${BACKUP_ROOT:-}"
+env_KEEP="${KEEP:-}"
+
 CONFIG="${CONFIG:-$HOME/.config/ms-backup.conf}"
 # shellcheck source=/dev/null
 [ -f "$CONFIG" ] && . "$CONFIG"
 
-SAVE_ROOT="${SAVE_ROOT:-$HOME/.local/share/Monster Sanctuary}"
-BACKUP_ROOT="${BACKUP_ROOT:-$SAVE_ROOT/backups}"
-KEEP="${KEEP:-50}"   # backups to keep per save file
+SAVE_ROOT="${env_SAVE_ROOT:-${SAVE_ROOT:-$HOME/.local/share/Monster Sanctuary}}"
+BACKUP_ROOT="${env_BACKUP_ROOT:-${BACKUP_ROOT:-$SAVE_ROOT/backups}}"
+KEEP="${env_KEEP:-${KEEP:-50}}"   # backups to keep per save file
 
 stamp=$(date +%Y%m%d-%H%M%S)
 found=0
@@ -44,6 +49,12 @@ done < <(find "$SAVE_ROOT" -mindepth 1 -maxdepth 2 \
     -name 'Savegame*.dat' -type f -print0 2>/dev/null)
 
 if [ "$found" -eq 0 ]; then
-    echo "no save files found under $SAVE_ROOT" >&2
+    # A freshly installed game has no save yet: normal, not a failure, so the
+    # timer does not report an error on every run until you first play.
+    if [ -d "$SAVE_ROOT" ]; then
+        echo "no save files yet under $SAVE_ROOT - nothing to back up"
+        exit 0
+    fi
+    echo "save directory not found: $SAVE_ROOT" >&2
     exit 1
 fi

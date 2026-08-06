@@ -34,12 +34,6 @@ The same command works. Run it from **Desktop Mode**:
 3. Paste the install command above
 4. **Steam** icon on the desktop → back to Game Mode
 
-Nothing to install as root, and nothing outside your home directory — so it survives SteamOS
-updates, which replace the whole system partition.
-
-Monster Sanctuary has a native Linux build, so it writes to the same path on the Deck as on any
-other Linux machine — no Proton prefix to chase.
-
 ## Restore
 
 With the game closed, copy the backup you want over the save file:
