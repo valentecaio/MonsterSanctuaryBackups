@@ -1,12 +1,10 @@
 #!/usr/bin/env bash
-# Installs ms-backup.sh from GitHub and schedules it every 15 minutes.
+# Installs ms-backup.sh from GitHub and schedules it every 15 minutes with a
+# systemd user timer. Works the same on regular Linux and on SteamOS/Steam Deck.
 #
 #   curl -fsSL https://raw.githubusercontent.com/valentecaio/MonsterSanctuaryBackups/main/install.sh | bash
 #
-# Scheduler is picked automatically: cron where it exists, otherwise a systemd
-# user timer (SteamOS/Steam Deck ships no cron). Override with SCHEDULER=cron
-# or SCHEDULER=systemd. Idempotent, and switching schedulers removes the other
-# one's entry so the backup never gets scheduled twice.
+# Idempotent: re-run to update.
 
 set -euo pipefail
 
@@ -14,10 +12,14 @@ REPO="${REPO:-valentecaio/MonsterSanctuaryBackups}"
 REF="${REF:-main}"
 RAW_BASE="${RAW_BASE:-https://raw.githubusercontent.com/$REPO/$REF}"
 TARGET="${TARGET:-$HOME/.local/bin/ms-backup.sh}"
-LOG="${LOG:-$HOME/.ms-backup.log}"
 UNIT_DIR="$HOME/.config/systemd/user"
 
 have() { command -v "$1" >/dev/null 2>&1; }
+
+have systemctl && systemctl --user show-environment >/dev/null 2>&1 || {
+    echo "no systemd user session available - cannot schedule the backup" >&2
+    exit 1
+}
 
 # ---------------------------------------------------------------- fetch script
 
@@ -54,49 +56,18 @@ if [ -n "${SAVE_ROOT:-}${BACKUP_ROOT:-}${KEEP:-}" ]; then
     echo "wrote config: $CONFIG"
 fi
 
-# ------------------------------------------------------------ pick a scheduler
+# ------------------------------------------------------------------- scheduling
 
-systemd_ok() { have systemctl && systemctl --user show-environment >/dev/null 2>&1; }
-
-if [ -n "${SCHEDULER:-}" ]; then
-    scheduler="$SCHEDULER"
-elif have crontab; then
-    scheduler=cron
-elif systemd_ok; then
-    scheduler=systemd
-else
-    echo "no scheduler available: install cron, or use a systemd user session" >&2
-    exit 1
+# Drop the cron entry left by older versions of this installer, so the backup
+# does not end up scheduled twice.
+if have crontab && crontab -l 2>/dev/null | grep -qF 'ms-backup.sh'; then
+    ( crontab -l 2>/dev/null | grep -Fv 'ms-backup.sh' || true ) | crontab -
+    echo "removed old cron entry"
 fi
 
-remove_cron() {
-    have crontab || return 0
-    crontab -l 2>/dev/null | grep -qF 'ms-backup.sh' || return 0
-    ( crontab -l 2>/dev/null | grep -Fv 'ms-backup.sh' || true ) | crontab -
-}
+mkdir -p "$UNIT_DIR"
 
-remove_timer() {
-    systemd_ok || return 0
-    [ -f "$UNIT_DIR/ms-backup.timer" ] || return 0
-    systemctl --user disable --now ms-backup.timer >/dev/null 2>&1 || true
-    rm -f "$UNIT_DIR/ms-backup.timer" "$UNIT_DIR/ms-backup.service"
-    systemctl --user daemon-reload
-}
-
-case "$scheduler" in
-cron)
-    have crontab || { echo "SCHEDULER=cron but crontab is not installed" >&2; exit 1; }
-    remove_timer
-    ( crontab -l 2>/dev/null | grep -Fv 'ms-backup.sh' || true
-      echo "*/15 * * * * $TARGET >> $LOG 2>&1" ) | crontab -
-    echo "scheduled via cron (every 15 min), logging to $LOG"
-    ;;
-systemd)
-    systemd_ok || { echo "SCHEDULER=systemd but no systemd user session is available" >&2; exit 1; }
-    remove_cron
-    mkdir -p "$UNIT_DIR"
-
-    cat > "$UNIT_DIR/ms-backup.service" <<'EOF'
+cat > "$UNIT_DIR/ms-backup.service" <<'EOF'
 [Unit]
 Description=Backup Monster Sanctuary save files
 
@@ -105,7 +76,7 @@ Type=oneshot
 ExecStart=%h/.local/bin/ms-backup.sh
 EOF
 
-    cat > "$UNIT_DIR/ms-backup.timer" <<'EOF'
+cat > "$UNIT_DIR/ms-backup.timer" <<'EOF'
 [Unit]
 Description=Backup Monster Sanctuary save files every 15 minutes
 
@@ -117,18 +88,12 @@ Persistent=true
 WantedBy=timers.target
 EOF
 
-    systemctl --user daemon-reload
-    systemctl --user enable --now ms-backup.timer
-    # Keep the timer running when no desktop session is logged in.
-    loginctl enable-linger "$USER" >/dev/null 2>&1 \
-        || echo "note: could not enable linger; timer runs while you are logged in"
-    echo "scheduled via systemd user timer (every 15 min), logs: journalctl --user -u ms-backup.service"
-    ;;
-*)
-    echo "unknown SCHEDULER '$scheduler' (use cron or systemd)" >&2
-    exit 1
-    ;;
-esac
+systemctl --user daemon-reload
+systemctl --user enable --now ms-backup.timer
+# Keep the timer running when no desktop session is logged in.
+loginctl enable-linger "$USER" >/dev/null 2>&1 \
+    || echo "note: could not enable linger; timer runs while you are logged in"
+echo "scheduled every 15 min, logs: journalctl --user -u ms-backup.service"
 
 # ------------------------------------------------------------------ first run
 

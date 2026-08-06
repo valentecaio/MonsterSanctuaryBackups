@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Backs up Monster Sanctuary save files with a timestamp in the name.
-# Safe to run repeatedly (e.g. from cron); skips writing a new copy when
-# nothing changed since the last backup.
+# Safe to run repeatedly (it runs from a systemd timer); skips writing a new
+# copy when nothing changed since the last backup.
 
 set -euo pipefail
 
-# Optional config, written by install.sh. Needed because cron and systemd do not
+# Optional config, written by install.sh. Needed because the timer does not
 # inherit the environment you installed from.
 CONFIG="${CONFIG:-$HOME/.config/ms-backup.conf}"
 # shellcheck source=/dev/null
@@ -13,7 +13,7 @@ CONFIG="${CONFIG:-$HOME/.config/ms-backup.conf}"
 
 SAVE_ROOT="${SAVE_ROOT:-$HOME/.local/share/Monster Sanctuary}"
 BACKUP_ROOT="${BACKUP_ROOT:-$SAVE_ROOT/backups}"
-KEEP="${KEEP:-200}"   # backups to keep per save file
+KEEP="${KEEP:-50}"   # backups to keep per save file
 
 stamp=$(date +%Y%m%d-%H%M%S)
 found=0
